@@ -1,0 +1,159 @@
+Excel Rows → LangChain Documents
+=================================
+Generated: 2026-05-26
+
+PIPELINE
+--------
+1. load_document (agent/document_loader.py) handles .xls / .xlsx
+2. chunk_documents (agent/chunker.py) may split long row text (default 1500 chars, 150 overlap)
+3. add_documents_to_store embeds chunks and stores them in FAISS
+4. At query time, rag_service._retrieve_vector_matches uses only doc.page_content — metadata is NOT passed to the LLM
+
+
+EXCEL LOADING LOGIC (document_loader.py)
+----------------------------------------
+- pd.read_excel(file_path, sheet_name=None) loads ALL sheets
+- For each sheet, for each row via df.iterrows():
+  - Build content list: for each column, if pd.notna(val), append "{col}: {val}"
+  - If at least one non-null cell, create one Document
+
+Code reference: agent/document_loader.py lines 45-66
+
+
+ONE DOCUMENT PER ROW?
+-------------------
+Yes — for each sheet, one Document per data row that has at least one non-empty cell.
+
+- All sheets are loaded
+- Rows where every cell is NaN are skipped
+- No sheet-level or workbook-level document
+
+
+FINAL GENERATED TEXT (page_content)
+-----------------------------------
+Template:
+
+  Source File: <original_filename>
+  Sheet: <sheet_name>
+  Row: <idx + 2>
+  <Column1>: <value1>
+  <Column2>: <value2>
+  ...
+
+Example — file "Contacts Guide.xlsx", sheet "Contacts", header row Name | Email | Team, first data row:
+
+  Source File: Contacts Guide.xlsx
+  Sheet: Contacts
+  Row: 2
+  Name: Jane Doe
+  Email: jane@example.com
+  Team: GNP
+
+Details:
+- Column headers: from Excel row 1 (pandas default header=0); not repeated as a separate schema block
+- Cell values: only non-null cells; format "{column_name}: {value}"
+- Order: same as df.columns
+- Empty cells: omitted from body
+
+
+METADATA ATTACHED
+-----------------
+Key          | Excel value        | Notes
+-------------|--------------------|----------------------------------
+source       | filename           | Set in row block + final loop
+sheet        | sheet name         | Excel only
+row          | idx + 2            | Excel only
+file_type    | e.g. .xlsx         | Added for all file types
+
+CSV rows differ:
+- No "sheet" key
+- row is idx + 1 (not idx + 2)
+- page_content has NO file/sheet/row header lines — only "col: val" lines
+
+
+SHEET NAMES AND ROW NUMBERS PRESERVED?
+--------------------------------------
+Location              | Sheet name | Row number
+----------------------|------------|------------
+page_content          | Yes        | Yes
+metadata              | Yes        | Yes
+Retrieval → LLM       | Yes        | Yes (embedded in text)
+Retrieval metadata    | N/A        | Not used for filtering
+
+Row number semantics:
+- idx is the DataFrame index from iterrows()
+- Code uses idx + 2, assuming row 1 is header and first data row is Excel row 2
+- Matches default read_excel when first row is headers
+
+Caveats:
+- If sheet has no header row, row labels would be off by one
+- If index is not 0,1,2,... (e.g. after filtering), idx+2 ≠ real Excel row number
+- Blank Excel rows are usually dropped by pandas; row numbers may not match physical file rows
+
+
+CHUNKING STEP (chunker.py)
+--------------------------
+- RecursiveCharacterTextSplitter: chunk_size=1500, chunk_overlap=150
+- Most rows stay one chunk
+- Very wide rows can split; metadata is typically copied to each chunk
+- Splits can cut mid-row and weaken one-embedding-per-logical-row
+
+
+PROBLEMS THAT CAN HURT SEMANTIC RETRIEVAL
+-----------------------------------------
+
+HIGH IMPACT
+1. Metadata ignored at retrieval
+   similarity_search returns only page_content. sheet/row in metadata do not help ranking or filtering unless rag_service.py is changed.
+
+2. No cross-row context
+   Each row is an isolated vector. Questions like "all contacts on GNP team" or "how many rows" need many hits; k=5 limits coverage.
+
+3. Repeated column names in every row
+   Every chunk repeats "Name:", "Email:", etc. Adds noise and dilutes signal for actual values, especially with many columns.
+
+4. Header row never indexed as its own chunk
+   Column meanings exist only as keys in "col: val" lines. Queries about "what columns does this file have?" may match poorly.
+
+5. Sparse rows
+   Partially empty rows produce thin, weak embeddings.
+
+MEDIUM IMPACT
+6. Pandas value formatting
+   Numbers as 1.0; dates as timestamps or Excel serials depending on types.
+
+7. Unnamed: N columns
+   Extra blank header columns become useless keys in text.
+
+8. Merged cells
+   Value usually in one cell; merged partners are NaN and omitted.
+
+9. CSV vs Excel inconsistency
+   CSV lacks file/sheet/row in page_content; row numbering differs (idx+1 vs idx+2).
+
+10. Wide tables + chunking
+    Rows >1500 chars split across chunks; semantic unit becomes fragments.
+
+LOWER IMPACT / OPERATIONAL
+11. No deduplication on re-upload
+12. No type-aware serialization (all str(val))
+13. iterrows() slow on huge sheets
+
+
+SUMMARY TABLE
+-------------
+Question                    | Answer
+----------------------------|--------------------------------------------------
+One doc per row?            | Yes (per sheet, if row has ≥1 non-null cell)
+Final text                  | Header block + "Column: value" lines
+Metadata                    | source, sheet, row, file_type
+Sheet/row in search?        | In text yes; metadata at query time no
+Main retrieval risks        | Row isolation, repeated headers, pandas formatting,
+                            | row-number assumptions, metadata unused, k=5 limit
+
+
+DESIGN NOTE
+-----------
+The loader intentionally puts sheet and row into page_content for semantic search
+(see comment in document_loader.py). Weak spot: each row is a standalone fact with
+no table-level structure, and metadata is not used during retrieval.

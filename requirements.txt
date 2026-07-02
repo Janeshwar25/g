@@ -1,0 +1,30 @@
+uvicorn
+fastapi
+langgraph
+langchain
+langchain-core
+langchain-community
+streamlit
+pymongo
+pandas
+smartsheet-python-sdk
+python-dotenv
+requests
+certifi
+numpy
+openpyxl
+tabulate
+httpx
+nest-asyncio
+faiss-cpu
+sentence-transformers
+pypdf
+
+# STRICT ENTERPRISE-ONLY INFERENCE MODE
+# Only company's Enterprise LLM Gateway is permitted.
+# No public LLMs. No fallback providers.
+#
+# DEPENDENCIES FOR ENTERPRISE GATEWAY:
+# ✓ requests (HTTP client for gateway) - ALREADY INCLUDED
+# ✓ python-dotenv (environment variables) - ALREADY INCLUDED
+# ✓ langchain-core (message types) - ALREADY INCLUDED

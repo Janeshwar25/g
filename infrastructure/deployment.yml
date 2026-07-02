@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: APPLICATION_NAME
+  name: APPLICATION_NAME
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: APPLICATION_NAME
+  template:
+    metadata:
+      labels:
+        app: APPLICATION_NAME
+      annotations:
+        deploymentDate: "DEPDATE_VAR"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: type
+                      operator: In
+                      values:
+                        - APPLICATION_NAME
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: APPLICATION_NAME
+          image: APP_IMAGE_DETAIL
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: prjplan-app-config
+            - secretRef:
+                name: prjplan-app-secrets
+          env:
+            - name: SMARTSHEET_WORKSPACE_ID
+              value: "your_workspace_id_here"
+            - name: VERIFY_SSL
+              value: "false"
+          ports:
+            - containerPort: 8080
+              name: http
+          livenessProbe:
+            httpGet:
+              path: '/'
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: '/'
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 30
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: '2'
+              memory: '4Gi'
+            requests:
+              cpu: '1'
+              memory: '2Gi'
+          securityContext:
+            capabilities:
+              drop:
+                - KILL
+                - MKNOD
+                - SYS_CHROOT
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
